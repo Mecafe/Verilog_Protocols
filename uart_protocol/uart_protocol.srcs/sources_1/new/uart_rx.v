@@ -1,69 +1,88 @@
 `timescale 1ns/1ps
-module uart_rx(clk,reset,rx_in,rx_en,rx_uld,rx_data,rx_empty);   
+//---------------------------------------------------------------------
+// UART receiver (16x oversampling)
+//   rd_en     : pulse for one clock to acknowledge/clear rx_empty after reading rx_data
+//   rx_empty  : 1 = no new data, 0 = rx_data holds a fresh unread byte
+//---------------------------------------------------------------------
+module uart_rx (
+    input  wire       clk,
+    input  wire       reset,
+    input  wire       rx_tick,
+    input  wire       rx_in,
+    input  wire       rd_en,
+    output reg  [7:0] rx_data,
+    output reg        rx_empty
+);
+    parameter IDLE=2'd0, START=2'd1, DATA=2'd2, STOP=2'd3;
 
-input rx_in;input rx_en;input rx_uld,clk,reset;
-output reg [7:0]rx_data;output reg rx_empty;
+    reg [1:0] p_s;
+    reg [3:0] sample_cnt;
+    reg [2:0] cnt;
+    reg [7:0] rx_shift;
 
-reg [2:0] cnt=0;
-reg [1:0]p_s;
-reg [7:0]rx_reg;
-parameter [1:0]IDLE=2'd0,START=2'd1,DATA=2'd2,STOP=2'd3;
-always@(posedge clk or negedge reset)
-begin
-if(reset==0) begin
-     rx_data<=1'b1;
-     rx_empty<=1'b1; 
-     cnt<=3 'b0;rx_reg<=0;
-     p_s<=IDLE;
-      end
-    else
-          begin
-          // if(rx_uld && !rx_empty)begin
-              rx_data<=rx_reg;
-              rx_empty<=1'b0;end
-          case(p_s)
-               IDLE:begin
-                      cnt<=0;
-                          //  if(rx_en &&(rx_in==1'b0))begin
-//                                      rx_empty<=0;
-//                                      rx_data<=0;
-                                      p_s<=START;end
-                                    //   else
-                                    //   p_s<=IDLE;
-                                    // end           
-                         
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            p_s        <= IDLE;
+            rx_data    <= 8'd0;
+            rx_empty   <= 1'b1;   // nothing received yet
+            sample_cnt <= 0;
+            cnt    <= 0;
+            rx_shift   <= 0;
+        end else begin
+            if (rd_en)
+                rx_empty <= 1'b1;   // byte has been read, clear "ready" flag
 
-                START:begin
-                 rx_empty<=0;
-                  rx_data<=0;   
-                //  if(rx_in==1'b0) 
-                  p_s<=DATA;
-                  // else
-                  // p_s<=IDLE;
-                end
-                
-                DATA:begin
-                  
-                  
-                      rx_reg[cnt]<=rx_in;
-                         if(cnt==3'd7)begin
-                            cnt<=0;
-                            p_s<=STOP; end
-                            else begin
-                             cnt<=cnt+1;
-                             p_s<=DATA;
-                              end
-               end 
-               STOP: begin
-            // if(rx_in == 1'b1)
-                rx_empty <= 1'b1;
+            if (rx_tick) begin
+                case (p_s)
+                    IDLE: begin
+                        sample_cnt <= 0;
+                        if (rx_in == 1'b0)      // possible start bit
+                            p_s <= START;
+                    end
 
-            p_s <= IDLE;end
-default: begin
-                 p_s<=IDLE;
-                       end
-  endcase 
-                
-end
+                    START: begin
+                        if (sample_cnt == 4'd7) begin      // sample mid start-bit
+                            if (rx_in == 1'b0) begin        // confirmed start bit
+                                sample_cnt <= 0;
+                                cnt    <= 0;
+                                p_s        <= DATA;
+                            end else begin
+                                p_s <= IDLE;                 // false start, glitch
+                            end
+                        end else begin
+                            sample_cnt <= sample_cnt + 1;
+                        end
+                    end
 
+                    DATA: begin
+                        if (sample_cnt == 4'd15) begin
+                            sample_cnt          <= 0;
+                            rx_shift[cnt]    <= rx_in;   // sample mid data-bit
+                            if (cnt == 3'd7)
+                                p_s <= STOP;
+                            else
+                                cnt <= cnt + 1;
+                        end else begin
+                            sample_cnt <= sample_cnt + 1;
+                        end
+                    end
+
+                    STOP: begin
+                        if (sample_cnt == 4'd15) begin
+                            sample_cnt <= 0;
+                            rx_data    <= rx_shift;
+                            rx_empty   <= 1'b0;              // new byte ready
+                            p_s        <= IDLE;
+                        end else begin
+                            sample_cnt <= sample_cnt + 1;
+                        end
+                    end
+
+                    default: p_s <= IDLE;
+                endcase
+            end
+        end
+    end
 endmodule
+
+

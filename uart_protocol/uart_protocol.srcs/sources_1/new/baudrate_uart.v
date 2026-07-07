@@ -1,40 +1,54 @@
-module baudrate_uart(clk, reset, tx_en, rx_en);
-input clk, reset, tx_en, rx_en;
-reg [14:0] cnt_tx;
-reg [10:0] cnt_rx;
-output reg rx_en;
-output reg tx_en;
 
-always @(posedge clk or negedge reset)
-begin
-if(!reset)
-begin
-    cnt <= 0;
-    rx_en <= 0;
-    tx_en <= 0;
-end
-else
-begin
-    if(cnt_tx == 15'd5207)
-    begin
-        cnt_tx <= 0;
-        tx_en <= 1;
-    end
-    else
-    begin
-        cnt_tx <= cnt_tx + 1;
-        tx_en <= 0;
-    end
+`timescale 1ns / 1ps
+//=====================================================================
+// Simple UART: baud generator + transmitter + receiver + top + testbench
+// Active-low asynchronous reset throughout (reset = 0 means "in reset").
+//=====================================================================
 
-    if(cnt_rx == 11'd2603)
-    begin
-        cnt_rx <= 0;
-        rx_en <= 1;
+//---------------------------------------------------------------------
+// Baud generator
+//   tx_tick : pulses once per bit period      (used by TX)
+//   rx_tick : pulses 16x per bit period        (used by RX for oversampling)
+// DIV controls how fast rx_tick fires (clk / DIV). Kept small here so
+// simulation runs quickly; make DIV bigger for a realistic baud rate.
+//---------------------------------------------------------------------
+module baud_gen  (
+    input  wire clk,
+    input  wire reset,
+    output reg  rx_tick,
+    output reg  tx_tick
+);
+    reg [2:0] div_cnt;
+    reg [3:0] rx_cnt;   // counts 16 rx_ticks make one tx_tick
+
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            div_cnt  <= 0;
+            rx_cnt  <= 0;
+            rx_tick  <= 0;
+            tx_tick  <= 0;
+        end else begin
+            // generate rx_tick every DIV clocks
+            if (div_cnt == 2'd3) begin
+                div_cnt <= 0;
+                rx_tick <= 1'b1;
+            end else begin
+                div_cnt <= div_cnt + 1;
+                rx_tick <= 1'b0;
+            end
+
+            // generate tx_tick every 16 rx_ticks
+            if (rx_tick) begin
+                if (rx_cnt == 4'd15) begin
+                    rx_cnt <= 0;
+                    tx_tick <= 1'b1;
+                end else begin
+                    rx_cnt <= rx_cnt + 1;
+                    tx_tick <= 1'b0;
+                end
+            end else begin
+                tx_tick <= 1'b0;
+            end
+        end
     end
-    else
-    begin
-        cnt_rx <= cnt_rx + 1;
-        rx_en <= 0;
-    end
-end
-end
+endmodule
